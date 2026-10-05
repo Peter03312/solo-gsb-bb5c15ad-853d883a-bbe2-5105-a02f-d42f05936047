@@ -24,7 +24,7 @@
  * 约定保持兼容。
  */
 
-const { validateStructure, validateRules } = require('./layout');
+const { validateStructure, validateRules, validateCueBodies } = require('./layout');
 const { normalizeLang, checkTranslationText } = require('./translation');
 const { evaluateTerms } = require('./glossary');
 
@@ -156,6 +156,8 @@ function evaluateDelivery(project, request, activeByLang, glossaryByLang) {
   const conflicts = [
     ...validateStructure(project.subtitles, project.words, project.cuts),
     ...validateRules(project.subtitles, project.rules),
+    // 源字幕正文无损性：任一正文无法写成单个 cue，整批失败（事务回滚，不占任何版本）
+    ...validateCueBodies(project.subtitles),
   ];
 
   const cueById = new Map(project.subtitles.map((c) => [c.id, c]));

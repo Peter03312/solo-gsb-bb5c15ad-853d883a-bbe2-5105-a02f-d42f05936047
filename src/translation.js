@@ -14,6 +14,8 @@
  *   - 待复核译文可由校对者在当前源行上确认；过期版本或无效译文返回当前值与原因且不改数据。
  */
 
+const { cueBodyProblems } = require('./cue-text');
+
 function isInt(v) {
   return typeof v === 'number' && Number.isInteger(v);
 }
@@ -38,6 +40,9 @@ function parseTranslationBody(body) {
   const b = body || {};
   if (typeof b.text !== 'string' || b.text.trim() === '') {
     errors.push('text（译文文本）必须是非空字符串');
+  } else {
+    // 无法无损写成单个 cue 的正文在写入前拒绝（指出问题行）
+    cueBodyProblems(b.text).forEach((p) => errors.push(p.message));
   }
   if (!isInt(b.cue_version) || b.cue_version < 1) {
     errors.push('cue_version（读取时源字幕行版本）必须是 ≥1 的整数');
@@ -74,6 +79,12 @@ function parseConfirmBody(body) {
  */
 function checkTranslationText(text, cue, rules) {
   const reasons = [];
+  // 正文无损性：无法写成单个 WebVTT cue 的译文（首尾换行/空白行/回车）拒绝。
+  // 保存/回填/恢复/导出各入口共用本函数，旧库不合格译文也会在导出前在此被列出。
+  const bodyErrors = cueBodyProblems(text);
+  if (bodyErrors.length > 0) {
+    reasons.push(`译文正文无法无损写成单个 WebVTT cue：${bodyErrors[0].message}`);
+  }
   const len = text.length;
   if (len > rules.max_chars) {
     reasons.push(`译文 ${len} 字，超过单条最大字数 ${rules.max_chars}`);
@@ -287,10 +298,12 @@ function evaluateExport(db, projectId, lang) {
     'SELECT cut_ms FROM shots WHERE project_id = ? ORDER BY idx'
   ).all(projectId).map((r) => r.cut_ms);
   // 延迟引用避免循环依赖（layout 不依赖本模块）
-  const { validateStructure, validateRules } = require('./layout');
+  const { validateStructure, validateRules, validateCueBodies } = require('./layout');
   const conflicts = [
     ...validateStructure(view.entries.map((e) => e.cue), words, cuts),
     ...validateRules(view.entries.map((e) => e.cue), view.rules),
+    // 旧库中不合格的源字幕正文（首尾换行/空白行/回车）在写快照前明确列行
+    ...validateCueBodies(view.entries.map((e) => e.cue)),
   ];
 
   const missing = [];

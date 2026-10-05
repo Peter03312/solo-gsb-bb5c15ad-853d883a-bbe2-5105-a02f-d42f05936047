@@ -31,6 +31,7 @@
 
 const crypto = require('crypto');
 const { normalizeLang, checkTranslationText } = require('./translation');
+const { cueBodyProblems } = require('./cue-text');
 
 function isInt(v) {
   return typeof v === 'number' && Number.isInteger(v);
@@ -98,6 +99,9 @@ function parseTranslationBatchBody(body, lang) {
       }
       if (typeof it.text !== 'string' || it.text.trim() === '') {
         itemErrors.push('text（译文文本）必须是非空字符串');
+      } else {
+        // 无法无损写成单个 cue 的正文在写入前拒绝（指出问题行）
+        cueBodyProblems(it.text).forEach((p) => itemErrors.push(p.message));
       }
       if (itemErrors.length > 0) {
         errors.push(`items[${i}]：${itemErrors.join('；')}`);

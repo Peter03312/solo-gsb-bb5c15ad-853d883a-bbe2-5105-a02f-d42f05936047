@@ -25,7 +25,7 @@
  *     普通 exports / translation_exports 与旧下载内容保持不变。
  */
 
-const { validateStructure, validateRules } = require('./layout');
+const { validateStructure, validateRules, validateCueBodies } = require('./layout');
 const { normalizeLang, checkTranslationText, activeTranslationsByLang } = require('./translation');
 const { getGlossary, checkTerms } = require('./glossary');
 
@@ -450,6 +450,8 @@ function evaluateAttributedExport(db, project, request) {
   const conflicts = [
     ...validateStructure(project.subtitles, project.words, project.cuts),
     ...validateRules(project.subtitles, project.rules),
+    // 源字幕正文无损性：不合格正文（首尾换行/空白行/回车）写快照前明确列行
+    ...validateCueBodies(project.subtitles),
   ];
 
   const attributionByCue = new Map(project.attributions.map((a) => [a.subtitle_id, a]));

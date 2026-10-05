@@ -5,6 +5,8 @@
  * 错误信息包含出问题的下标/数值，便于前端直接展示。
  */
 
+const { cueBodyProblems } = require('./cue-text');
+
 function isInt(v) {
   return typeof v === 'number' && Number.isInteger(v);
 }
@@ -28,6 +30,12 @@ function validateWords(words) {
     if (typeof w.text !== 'string' || w.text.trim() === '') {
       errors.push(`第 ${i} 个词缺少文本（text 必须是非空字符串）`);
       continue;
+    }
+    // 提交的原始词文本必须能无损写成单个 cue：trim 只去首尾空白、不会消除
+    // 段内空白行或回车；无法无损写入的词文本拒绝导入，并指出是哪个词。
+    const bodyErrors = cueBodyProblems(w.text);
+    if (bodyErrors.length > 0) {
+      errors.push(`第 ${i} 个词 ${JSON.stringify(w.text.slice(0, 20))}：${bodyErrors[0].message}`);
     }
     if (!isInt(w.start_ms) || !isInt(w.end_ms)) {
       errors.push(`第 ${i} 个词 "${w.text}" 的时间必须是整数毫秒`);

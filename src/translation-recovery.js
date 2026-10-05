@@ -289,7 +289,7 @@ function evaluateRecovery(db, project, lang, request) {
       out.matches = m.matches;
     }
 
-    // 现行字数/字速（时长随当前源行）；仅在其余核对通过时报告，避免原因堆叠
+    // 现行字数/字速（时长随当前源行）与正文无损性；仅在其余核对通过时报告，避免原因堆叠
     if (out.state === 'ok') {
       const ruleReasons = checkTranslationText(hist.text, cue, project.rules);
       if (ruleReasons.length > 0) {

@@ -85,20 +85,20 @@ Compose 默认把 SQLite 挂到命名卷 `subtitle-data` 持久化（含所有�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/api/projects` | 项目列表 |
-| `POST` | `/api/projects` | 新建项目（可同时带 `words`/`cuts`/`rules`） |
+| `POST` | `/api/projects` | 新建项目（可同时带 `words`/`cuts`/`rules`）；词文本含首尾换行/段内空白行/回车 → `422` 并指出第几个词 |
 | `GET` | `/api/projects/:id` | 项目完整数据（词、切点、规则、字幕、导出列表） |
-| `POST` | `/api/projects/:id/import` | 替换转写与切点；已有字幕时需 `{"force": true}`（会清空字幕） |
+| `POST` | `/api/projects/:id/import` | 替换转写与切点；已有字幕时需 `{"force": true}`（会清空字幕）；词正文无损性同新建 |
 | `PUT` | `/api/projects/:id/rules` | 改规则，需带当前 `version`，过期返回 `409` + 当前规则 |
 | `POST` | `/api/projects/:id/layout` | 重排未锁定字幕，需带 `sub_version`；冲突返回 `422` + `conflicts` |
-| `PATCH` | `/api/projects/:id/subtitles/:sid` | 编辑/锁定单条，需带行 `version`，过期返回 `409` + 当前行 |
-| `POST` | `/api/projects/:id/exports` | 校验并确认导出（可带 `sub_version` 防呆），生成新版本快照 |
+| `PATCH` | `/api/projects/:id/subtitles/:sid` | 编辑/锁定单条，需带行 `version`，过期返回 `409` + 当前行；正文无法无损写成单个 cue（首尾换行/空白行/回车）→ `422` 指出行，段内单换行允许 |
+| `POST` | `/api/projects/:id/exports` | 校验并确认导出（可带 `sub_version` 防呆），生成新版本快照；旧库不合格正文在 `conflicts`（`cue_text_unwritable`）中按行列明 |
 | `GET` | `/api/projects/:id/exports` | 导出版本列表 |
 | `GET` | `/api/projects/:id/exports/:version` | 下载某版本 `.vtt`（内容创建后不变） |
-| `POST` | `/api/projects/:id/revisions` | 提交一组待采纳修订：`{note?, items:[{subtitle_id, cue_version, text, start_ms?, end_ms?}]}`，保存原值/规则版本快照，**不改正式字幕** |
+| `POST` | `/api/projects/:id/revisions` | 提交一组待采纳修订：`{note?, items:[{subtitle_id, cue_version, text, start_ms?, end_ms?}]}`，保存原值/规则版本快照，**不改正式字幕**；建议正文无法无损写成单个 cue → `422` 指出对应行 |
 | `GET` | `/api/projects/:id/revisions` | 提议历史（pending/accepted、项数、快照版本） |
 | `GET` | `/api/projects/:id/revisions/:rid` | 单个提议：逐项 `orig`（提交时原值）与 `proposed`（建议值，时间为 `null` 表示沿用原值） |
 | `POST` | `/api/projects/:id/revisions/:rid/preview` | 只读预览核对：并列原值/当前值/建议值，按整版候选逐处列冲突（`evaluation.items[].conflicts`） |
-| `POST` | `/api/projects/:id/revisions/:rid/accept` | 事务内再次核对并原子采纳；过期类（行版本/规则版本/已锁定/已消失/重复采纳）→ `409`，规则/结构违规 → `422`，均带 `current` 与每项 `reasons` |
+| `POST` | `/api/projects/:id/revisions/:rid/accept` | 事务内再次核对并原子采纳；过期类（行版本/规则版本/已锁定/已消失/重复采纳）→ `409`，规则/结构违规（含 `cue_text_unwritable` 正文问题）→ `422`，均带 `current` 与每项 `reasons` |
 | `POST` | `/api/projects/:id/word-revisions` | 提交一组逐词时间修正：`{note?, sub_version, items:[{word_idx, start_ms, end_ms}]}`，保存原值快照，**不改词与字幕** |
 | `GET` | `/api/projects/:id/word-revisions` | 词修正提议历史（pending/confirmed、词数、快照版本） |
 | `GET` | `/api/projects/:id/word-revisions/:wrid` | 单个提议：逐项 `orig`（读取时原值）/`current`（当前词，含文本）/`proposed`（建议值） |
@@ -106,16 +106,16 @@ Compose 默认把 SQLite 挂到命名卷 `subtitle-data` 持久化（含所有�
 | `POST` | `/api/projects/:id/word-revisions/:wrid/confirm` | 事务内再次核对并原子确认；过期类（字幕集版本/词漂移/词缺失/重复确认）→ `409`，锁定或排版不可兼顾 → `422`，均带 `current` 与每项 `reasons` |
 | `GET` | `/api/projects/:id/translations` | 译文语言总览（各语言 current/review/历史条数与导出数） |
 | `GET` | `/api/projects/:id/translations/:lang` | 单语言并列查询：逐行原文/译文/状态（`missing`/`current`/`review`）、现行规则 `invalid_reasons`、导出列表与历史译文 |
-| `PUT` | `/api/projects/:id/translations/:lang/subtitles/:sid` | 保存/更新译文：`{text, cue_version, version?}`；新建 201 / 更新 200，行版本或译文版本过期 → `409`，译文超字数/字速 → `422` |
+| `PUT` | `/api/projects/:id/translations/:lang/subtitles/:sid` | 保存/更新译文：`{text, cue_version, version?}`；新建 201 / 更新 200，行版本或译文版本过期 → `409`，正文含首尾换行/空白行/回车 → `400`，超字数/字速 → `422` |
 | `POST` | `/api/projects/:id/translations/:lang/subtitles/:sid/confirm` | 确认待复核译文：`{version}`；非 review → `422`、版本过期 → `409`、规则不通过 → `422`（均返回当前值且不改数据） |
-| `POST` | `/api/projects/:id/translations/:lang/exports` | 校验并按语言导出译文 WebVTT；缺译/待复核/无效/整版冲突 → `422` 分类列出不生成快照（可带 `sub_version` 防呆，过期 → `409`） |
+| `POST` | `/api/projects/:id/translations/:lang/exports` | 校验并按语言导出译文 WebVTT；缺译/待复核/无效/正文不合格/整版冲突 → `422` 分类列出不生成快照（可带 `sub_version` 防呆，过期 → `409`） |
 | `GET` | `/api/projects/:id/translations/:lang/exports` | 某语言译文导出快照列表 |
 | `GET` | `/api/projects/:id/translations/:lang/exports/:version` | 下载某语言某版本译文 `.vtt`（内容创建后不变） |
-| `POST` | `/api/projects/:id/translations/:lang/batches` | **译者整批回填（一种语言）**：`{batch_no, sub_version, rules_version, items:[{subtitle_id, cue_version, version?(0=新建), text}]}`；首次 `201`，同编号同内容重放 `200 replayed`；形状非法 `400`、版本过期/编号冲突 `409`、字数/字速违规 `422`（按行返回 `current` 与原因，整批不写入，失败不占编号） |
+| `POST` | `/api/projects/:id/translations/:lang/batches` | **译者整批回填（一种语言）**：`{batch_no, sub_version, rules_version, items:[{subtitle_id, cue_version, version?(0=新建), text}]}`；首次 `201`，同编号同内容重放 `200 replayed`；任一行正文无法无损写成单个 cue / 形状非法 `400`（指出 `items[i]`，整批不写入、不占编号）、版本过期/编号冲突 `409`、字数/字速违规 `422`（按行返回 `current` 与原因） |
 | `GET` | `/api/projects/:id/translations/:lang/batches/list` | 某语言译文回填批次清单（倒序） |
 | `GET` | `/api/projects/:id/translation-batches` | 全部语言译文回填批次清单（倒序） |
 | `GET` | `/api/projects/:id/translation-batches/:tbid` | 单个回填批次：逐行清单与写入结果（`created`/`updated`、结果版本） |
-| `POST` | `/api/projects/:id/deliveries` | **片方交付批次**：`{note?, sub_version, rules_version, languages:[...], translations:{lang:[{subtitle_id, version}]}}`；事务内核对版本/结构/规则/逐行译文，通过则原文与各语言各生成一个不可变 WebVTT 并关联批次 |
+| `POST` | `/api/projects/:id/deliveries` | **片方交付批次**：`{note?, sub_version, rules_version, languages:[...], translations:{lang:[{subtitle_id, version}]}}`；事务内核对版本/结构/规则/逐行译文（含源/译文正文无损性），通过则原文与各语言各生成一个不可变 WebVTT 并关联批次；任一文件正文不合格 → `422` 整批失败，不占任何导出版本 |
 | `GET` | `/api/projects/:id/deliveries` | 交付批次清单（倒序，含每批文件清单、字幕集/规则版本） |
 | `GET` | `/api/projects/:id/deliveries/:bid` | 单个批次清单（文件序列版本与既有下载地址；正文走下载接口） |
 | `GET` | `/api/projects/:id/deliveries/diff?base_id=&target_id=` | **片方审阅：两批交付字幕差异对照（只读）**：以两批各自冻结的 WebVTT 为准按时间区段比较显示文本，语言取并集并标注新增/移除；参数非法 `400`、批次不存在或跨项目 `404`、快照缺失/格式损坏 `500`（指出批次与文件、整份报告失败不返回部分结果） |
@@ -125,7 +125,7 @@ Compose 默认把 SQLite 挂到命名卷 `subtitle-data` 持久化（含所有�
 | `GET` | `/api/projects/:id/attributions` | 归属并列视图：名册、逐行字幕与归属（编号/显示名/标注时行版本）、计数与历史归属 |
 | `PUT` | `/api/projects/:id/attributions/subtitles/:sid` | 标注单行（锁定行也可）：`{attribution_version, cue_version, speaker_number}`；首次 `201`/覆盖 `200`；版本过期 → `409`，编号不存在 → `400`，字幕不存在 → `404` |
 | `POST` | `/api/projects/:id/attributions/batch` | 批量标注：`{attribution_version, items:[{subtitle_id, cue_version, speaker_number}]}`；事务内整批核对，任一过期/编号缺失整批不写入（按行返回当前值与原因），通过后整批写入、归属版本只推进一次 |
-| `POST` | `/api/projects/:id/attributed-exports` | **署名版导出**：`{sub_version, attribution_version, lang?, translations?:[{subtitle_id, version}]}`；不带 `lang` 为原文，带 `lang` 为一种译文；同一事务核对每行有效归属（译文另逐行核对版本/状态/规则），失败 `422` 按行列 `codes`/`reasons` 且不生成快照，版本漂移 → `409`；成功另存带 `<v 显示名>` 标签的不可变快照 |
+| `POST` | `/api/projects/:id/attributed-exports` | **署名版导出**：`{sub_version, attribution_version, lang?, translations?:[{subtitle_id, version}]}`；不带 `lang` 为原文，带 `lang` 为一种译文；同一事务核对每行有效归属（译文另逐行核对版本/状态/规则/正文无损性），失败 `422` 按行列 `codes`/`reasons`（源侧问题在 `conflicts`）且不生成快照，版本漂移 → `409`；成功另存带 `<v 显示名>` 标签的不可变快照 |
 | `GET` | `/api/projects/:id/attributed-exports` | 署名版快照清单（原文/译文同一连续序列，倒序，含字幕集/归属/规则版本） |
 | `GET` | `/api/projects/:id/attributed-exports/:version` | 下载某版本署名版 `.vtt`（内容创建后不变） |
 | `GET` | `/api/projects/:id/glossaries` | 译审术语表总览：各语言术语版本与词条数 |
@@ -133,7 +133,7 @@ Compose 默认把 SQLite 挂到命名卷 `subtitle-data` 持久化（含所有�
 | `PUT` | `/api/projects/:id/glossaries/:lang` | **整表修改术语**：`{version, terms:[{source,target}]}`；未配置 `version:0`，过期 → `409`（带 `current` 当前表）；空词/空译法/同源词重复 → `400`；允许空数组清空 |
 | `GET` | `/api/projects/:id/glossaries/:lang/missing` | **术语缺失查询**：按语言/字幕 ID/源词逐条列出缺失规定译法（含无译文行）与当前 `glossary_version` |
 | `GET` | `/api/projects/:id/translations/:lang/recovery-candidates` | **历史译文找回候选（只读）**：列出该语言当前缺译行的全部历史候选与匹配依据（`same_import`/`same_word_span`/`same_text`、`recoverable` 与中文原因），附当前 `import_version`/`sub_version`/`rules_version` |
-| `POST` | `/api/projects/:id/translations/:lang/recover` | **组级恢复历史译文**：`{sub_version, rules_version, items:[{subtitle_id, cue_version, translation_id, version}]}`，可一次多行；事务内重核目标仍缺译、候选三要素与现行字数/字速，任一失效按行返回原因且整组不写；成功 `201` 写成普通 current 译文（新版本从 1 开始），历史行保留不改 |
+| `POST` | `/api/projects/:id/translations/:lang/recover` | **组级恢复历史译文**：`{sub_version, rules_version, items:[{subtitle_id, cue_version, translation_id, version}]}`，可一次多行；事务内重核目标仍缺译、候选三要素与现行字数/字速/正文无损性，任一失效按行返回原因且整组不写；成功 `201` 写成普通 current 译文（新版本从 1 开始），历史行保留不改 |
 | `GET` | `/api/projects/:id/comments` | **复核意见列表**：逐条返回状态（`open`/`closed`/`review`/`history`）、词段（当前词段 + 创建时快照）与相交的当前字幕；历史意见（旧导入代次）单独列出，附当前 `import_version`/`sub_version` 与各状态计数 |
 | `POST` | `/api/projects/:id/comments` | **创建复核意见**：`{import_version, sub_version, word_start, word_end, text}`；区间须落在现有逐词转写内；形状非法 `400`、词区间越界 `422`、导入代次/字幕集版本过期 `409`（均返回当前值且不创建） |
 | `POST` | `/api/projects/:id/comments/:cid/close` | **关闭意见**：`{version}`（意见版本）；须有相交的当前字幕并保存其文本/时间/词区间快照；版本过期 `409`、历史意见或无相交字幕 `422`（返回当前值且不修改） |
@@ -165,6 +165,42 @@ Compose 默认把 SQLite 挂到命名卷 `subtitle-data` 持久化（含所有�
 - 词段太密，最短时长/每秒字数在相邻字幕与切点夹出的空间内放不下 → 报 `duration`（含所需毫秒数与可用空间）。
 
 此时接口返回 `422` 与完整冲突列表，**不写入任何字幕**；调整切点、规则或转写后重新排版即可。
+
+## cue 正文限制：必须能无损写成单个 WebVTT cue
+
+每条字幕冻结导出时写成**一个** WebVTT cue：正文整体位于时间行之后、下一个空行之前。因此原文与译文正文都必须满足：
+
+- ❌ **首部换行 / 空白行**（如 `"\n正文"`）；
+- ❌ **尾部换行 / 空白行**（如 `"正文\n"`）——块间分隔会把它静默吞掉，导出后“丢失”；
+- ❌ **段内空白行**（连续换行，如 `"第一段\n\n第二段"`；只含空格/制表符的行也算）——空行会截断 cue，其后内容脱离该 cue；
+- ❌ **回车符**（`\r` / CRLF）——解析端统一归一为 LF，无法无损还原。
+- ✅ **段内单个换行合法**：`"第一行\n第二行"` 会成为该 cue 的多行正文，往返一致；行内空白照常保留。
+- ✅ 空字符串 `""` 仍是合法的“空载荷”空白字幕（仅原文；译文本来就要求非空）。
+
+**写入入口一律拒绝不合格正文并指出对应行**（修正后可重试）：
+
+| 入口 | 状态码 | 定位方式 |
+|---|---|---|
+| 项目导入（`POST /api/projects`、`…/import`） | `422` | `errors` 指出“第 N 个词” |
+| 单条字幕编辑 `PATCH …/subtitles/:sid` | `422` | `errors` 指出“第 N 行”（字幕展示行） |
+| 修订提议提交 `POST …/revisions` | `422` | `errors` 指出字幕 ID 与行 |
+| 修订采纳（含旧库遗留的不合格提议） | `422` | 逐项 `conflicts` 类型 `cue_text_unwritable`，整组不生效 |
+| 单条译文保存 `PUT …/translations/:lang/subtitles/:sid` | `400`（形状） | `errors` 指出问题行；旧库不合格译文在导出核对中按行列出 |
+| 整批译文回填 `POST …/translations/:lang/batches` | `400` | `errors` 指出 `items[i]`，整批不写入、不占批次编号 |
+| 历史译文恢复 `POST …/translations/:lang/recover` | `422` | 候选正文不合格按行列入 `invalid`，整组不恢复 |
+
+**旧库中已经存在的不合格正文**（升级前写入）不会被静默改动，但四类冻结导出在**写快照前**会明确列出问题行，不生成快照：
+
+- 原文导出 `POST …/exports` 与署名版导出（源侧）：问题以冲突形式出现在 `conflicts`（`type: "cue_text_unwritable"`，带 `subtitle_id`/`idx`/`line` 与中文说明）；
+- 单语导出 `POST …/translations/:lang/exports`：源侧问题在 `conflicts`，译文侧问题在 `invalid` 行的原因中；
+- 多语交付 `POST …/deliveries`：源侧问题在 `conflicts`，某语言译文问题在 `languages[].invalid`；**多文件交付整体事务失败，不生成批次、不占任何导出版本**；
+- 署名版译文导出：源侧在 `conflicts`，译文侧在逐行 `rows[].codes/reasons`。
+
+按提示把对应行改正（去掉首尾换行/段内空行/回车，或改用单换行）后即可照常导出。`toWebVtt` 写入侧另有防御断言，任何漏网的不合格正文都会直接抛错而不是产出会被判损坏的快照。
+
+**已冻结文件保持兼容**：历史快照的下载内容与格式不变；批次差异、返修等仍只解析冻结文件，旧坏快照继续按既有的“快照损坏（500）”口径报错，不新增错误码也不重写旧文件。
+
+纯 HTTP 调用示例（导入/编辑/单条译文/整批回填被拒 → 修正文后导出成功）：`examples/cue-text-api.sh`。
 
 ## 批量修订提议（校对 → 预览 → 采纳）
 
@@ -723,9 +759,11 @@ src/translation-recovery.js 重排后历史译文找回：缺译行候选视图�
 src/comment.js       逐词区间复核意见：请求解析/相交字幕计算与关闭快照/字幕变更对账（closed→review、旧代次→history）/列表视图（词段+相交字幕）
 src/rework.js        片方返修意见：请求解析/批次归属与冻结文件快照校验/区间命中与时间轴校验/区间内区段比较（无法核对/未改动/待人工确认）/判定结论（绑定目标批次，意见版本乐观锁）/核对报告组装
 src/vtt.js           WebVTT 序列化（普通正文与署名版 <v 显示名> 说话人标签）+ 严格解析（时间戳/cue/时间轴校验）与按时间区段的字幕文本差异（区段切分+相邻合并）
+src/cue-text.js      cue 正文无损性校验（拒绝回车/首尾换行/段内空白行；段内单换行合法），写入入口与导出前快照闸共用
 src/routes.js        Express API
 public/              前端（原生 HTML/CSS/JS 单页，含字幕修订、逐词修正、多语言译文、说话人标注与逐词区间复核意见面板）
 examples/sample.json 示例转写与切点
+examples/cue-text-api.sh cue 正文限制（导入/编辑/修订/单条与整批译文拒绝不合格正文→指出行→修正后导出）的完整 curl 调用示例
 examples/revisions-api.sh 批量字幕修订提议的完整 curl 调用示例
 examples/word-revisions-api.sh 逐词时间修正（提交→预览→确认）的完整 curl 调用示例
 examples/translations-api.sh 多语言译文字幕（保存→查询→失效/复核→确认→按语言导出）的完整 curl 调用示例

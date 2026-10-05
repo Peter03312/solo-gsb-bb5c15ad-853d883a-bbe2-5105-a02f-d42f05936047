@@ -1,5 +1,7 @@
 'use strict';
 
+const { cueBodyProblems } = require('./cue-text');
+
 /** 毫秒 -> WebVTT 时间戳 HH:MM:SS.mmm */
 function formatTimestamp(ms) {
   const h = Math.floor(ms / 3600000);
@@ -22,6 +24,13 @@ function toWebVtt(cues) {
   const sorted = [...cues].sort((a, b) => a.start_ms - b.start_ms || a.end_ms - b.end_ms);
   const blocks = ['WEBVTT', ''];
   sorted.forEach((c, i) => {
+    // 写入侧最后一道闸：正文必须能无损写成单个 cue（无回车、无首尾/段内空行）。
+    // 各业务入口（导入/编辑/修订/译文回填/恢复）与导出前核对均已拒绝，正常不会走到；
+    // 走到说明上游漏检，直接抛错而不是生成会被判损坏的快照。
+    const bad = cueBodyProblems(c.text);
+    if (bad.length > 0) {
+      throw new Error(`第 ${i + 1} 条字幕正文无法无损写成单个 cue：${bad[0].message}`);
+    }
     const body = c.speaker ? `<v ${c.speaker}>${c.text}</v>` : c.text;
     blocks.push(
       String(i + 1),

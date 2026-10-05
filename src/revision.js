@@ -1,6 +1,7 @@
 'use strict';
 
 const { validateStructure, validateRules } = require('./layout');
+const { cueBodyProblems } = require('./cue-text');
 
 /**
  * 校对者批量修订提议：请求解析与整组候选核对（纯函数，不依赖数据库）。
@@ -156,6 +157,14 @@ function checkCandidate(cue, prev, next, words, cuts, rules) {
   }
   // 规则：字数 / 时长 / 字速
   const len = text.length;
+  // 正文无损性：无法写成单个 WebVTT cue 的正文（首尾换行/空白行/回车）一律冲突
+  const bodyErrors = cueBodyProblems(text);
+  if (bodyErrors.length > 0) {
+    out.push({
+      type: 'cue_text_unwritable', subtitle_id: cue.id,
+      message: `${cueRef(cue.id)} 建议正文无法无损写成单个 WebVTT cue：${bodyErrors[0].message}`,
+    });
+  }
   if (len > rules.max_chars) {
     out.push({
       type: 'max_chars', subtitle_id: cue.id,

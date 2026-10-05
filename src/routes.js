@@ -7,7 +7,7 @@ const {
   bumpImportVersion,
   DEFAULT_RULES,
 } = require('./db');
-const { computeLayout, validateStructure, validateRules } = require('./layout');
+const { computeLayout, validateStructure, validateRules, validateCueBodies } = require('./layout');
 const { validateWords, validateCuts, validateRules: validateRulesInput, validateSubtitleEdit } = require('./validate');
 const { parseRevisionItems, evaluateRevision } = require('./revision');
 const { parseWordRevisionItems, evaluateWordRevision } = require('./word-revision');
@@ -52,6 +52,7 @@ const {
   fileLabel: reworkFileLabel, fileRef: reworkFileRef, toIntId: toReworkIntId,
 } = require('./rework');
 const { toWebVtt } = require('./vtt');
+const { cueBodyProblems } = require('./cue-text');
 
 /**
  * 挂载 API 路由。统一错误格式：
@@ -306,6 +307,13 @@ function createApp(db) {
     if (newText.trim() === '') {
       return res.status(422).json({ error: '字幕文本不能为空', errors: ['字幕文本不能为空'] });
     }
+    // 正文必须能无损写成单个 WebVTT cue（拒绝首尾换行/空白行/回车；段内单换行合法）
+    const cueErrors = cueBodyProblems(newText).map((p) =>
+      `第 ${row.idx + 1} 行：${p.message}`
+    );
+    if (cueErrors.length > 0) {
+      return res.status(422).json({ error: '字幕正文无法无损写成单个 WebVTT cue，未保存', errors: cueErrors });
+    }
     if (start_ms !== undefined || end_ms !== undefined) {
       const neighbors = {
         prev: db.prepare(
@@ -362,7 +370,9 @@ function createApp(db) {
     }
     const structural = validateStructure(p.subtitles, p.words, p.cuts);
     const ruleProblems = validateRules(p.subtitles, p.rules);
-    const conflicts = [...structural, ...ruleProblems];
+    // 正文无损性：旧库中含首尾换行/空白行/回车的不合格正文在此明确列行，拒绝写快照
+    const bodyProblems = validateCueBodies(p.subtitles);
+    const conflicts = [...structural, ...ruleProblems, ...bodyProblems];
     if (conflicts.length > 0) {
       return res.status(422).json({
         error: `字幕未通过导出校验（${conflicts.length} 处问题），未生成文件`,
@@ -811,6 +821,11 @@ function createApp(db) {
       const e = it.end_ms !== null ? it.end_ms : cue.end_ms;
       if (s >= e) {
         stateErrors.push(`字幕 ${it.subtitle_id} 合并单侧时间后为 [${s}, ${e}]，开始必须早于结束`);
+      }
+      // 正文无损性：无法写成单个 cue 的提议不保存（指出对应行）
+      const bodyErrors = cueBodyProblems(it.text);
+      if (bodyErrors.length > 0) {
+        stateErrors.push(`字幕 ${it.subtitle_id}（第 ${cue.idx + 1} 行）：${bodyErrors[0].message}`);
       }
     }
     if (stateErrors.length > 0) {

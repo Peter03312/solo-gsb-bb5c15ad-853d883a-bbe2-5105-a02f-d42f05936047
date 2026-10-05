@@ -1,5 +1,7 @@
 'use strict';
 
+const { cueBodyProblems } = require('./cue-text');
+
 /**
  * 字幕排版引擎（纯函数，不依赖数据库）。
  *
@@ -365,4 +367,33 @@ function validateRules(cues, rules) {
   return problems;
 }
 
-module.exports = { computeLayout, validateStructure, validateRules, joinWords };
+/**
+ * 正文无损性校验（导出前快照闸，含锁定字幕）：每条字幕正文都必须能无损写成
+ * 单个 WebVTT cue（无回车、无首尾换行、无段内空白行）。旧库中不合格的正文
+ * 在此按行明确列出，修正对应行后即可照常导出。
+ * 返回与 validateRules 同形的问题列表：{type, word_start, word_end, subtitle_id?,
+ * idx?, line?, message}。
+ */
+function validateCueBodies(cues) {
+  const problems = [];
+  const sorted = [...cues].sort((a, b) => (a.idx ?? 0) - (b.idx ?? 0));
+  sorted.forEach((c) => {
+    const errs = cueBodyProblems(c.text);
+    for (const p of errs) {
+      problems.push({
+        type: 'cue_text_unwritable',
+        word_start: c.word_start,
+        word_end: c.word_end,
+        ...(c.id !== undefined ? { subtitle_id: c.id } : {}),
+        ...(c.idx !== undefined ? { idx: c.idx } : {}),
+        line: p.line,
+        message:
+          `字幕 第 ${(c.idx ?? 0) + 1} 行${c.id !== undefined ? `（ID ${c.id}）` : ''}` +
+          `正文无法无损写成单个 WebVTT cue：${p.message}`,
+      });
+    }
+  });
+  return problems;
+}
+
+module.exports = { computeLayout, validateStructure, validateRules, validateCueBodies, joinWords };
