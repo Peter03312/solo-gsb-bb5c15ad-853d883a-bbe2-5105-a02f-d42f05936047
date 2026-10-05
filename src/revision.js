@@ -1,6 +1,7 @@
 'use strict';
 
 const { validateStructure, validateRules } = require('./layout');
+const { cueTextProblem } = require('./vtt');
 
 /**
  * 校对者批量修订提议：请求解析与整组候选核对（纯函数，不依赖数据库）。
@@ -62,6 +63,19 @@ function parseRevisionItems(body) {
     if (typeof it.text !== 'string' || it.text.trim() === '') {
       pushErr(`第 ${i + 1} 项：替代文本 text 不能为空`);
       rowBad = true;
+    } else {
+      // 采纳后正文会冻结为 WebVTT：首尾换行/段内空白行/回车无法无损写成单个 cue，
+      // 提交即拒绝并指出问题行（段内单换行允许）。
+      const cueProblem = cueTextProblem(it.text);
+      if (cueProblem) {
+        const where = cueProblem.label === 'head'
+          ? '开头存在首部空行'
+          : cueProblem.label === 'tail'
+            ? `第 ${cueProblem.index} 行后存在尾部空行`
+            : `第 ${cueProblem.index} 行有问题`;
+        pushErr(`第 ${i + 1} 项：替代文本${where}，无法无损写成单个 WebVTT cue：${cueProblem.reason}`);
+        rowBad = true;
+      }
     }
     let start = null;
     let end = null;
@@ -99,6 +113,16 @@ function parseRevisionItems(body) {
 
 function cueRef(id) {
   return `字幕 #${id}`;
+}
+
+/** 把 cueTextProblem 格式化为核对冲突说明（指出问题行） */
+function describeCueProblem(problem) {
+  const where = problem.label === 'head'
+    ? '第 1 行前存在首部空行'
+    : problem.label === 'tail'
+      ? `第 ${problem.index} 行后存在尾部空行`
+      : `第 ${problem.index} 行有问题`;
+  return `正文${where}，无法无损写成单个 WebVTT cue：${problem.reason}`;
 }
 
 /**
@@ -156,6 +180,14 @@ function checkCandidate(cue, prev, next, words, cuts, rules) {
   }
   // 规则：字数 / 时长 / 字速
   const len = text.length;
+  // 正文须能无损写成单个 WebVTT cue（旧提议或绕过提交的历史数据防御）
+  const cueProblem = cueTextProblem(text);
+  if (cueProblem) {
+    out.push({
+      type: 'cue_text_unsafe', subtitle_id: cue.id,
+      message: `${cueRef(cue.id)} ${describeCueProblem(cueProblem)}`,
+    });
+  }
   if (len > rules.max_chars) {
     out.push({
       type: 'max_chars', subtitle_id: cue.id,

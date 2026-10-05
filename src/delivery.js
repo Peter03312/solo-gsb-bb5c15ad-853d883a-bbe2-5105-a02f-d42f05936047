@@ -27,6 +27,7 @@
 const { validateStructure, validateRules } = require('./layout');
 const { normalizeLang, checkTranslationText } = require('./translation');
 const { evaluateTerms } = require('./glossary');
+const { cueRowTextProblems } = require('./vtt');
 
 function isInt(v) {
   return typeof v === 'number' && Number.isInteger(v);
@@ -156,6 +157,18 @@ function evaluateDelivery(project, request, activeByLang, glossaryByLang) {
   const conflicts = [
     ...validateStructure(project.subtitles, project.words, project.cuts),
     ...validateRules(project.subtitles, project.rules),
+    // 原文文件会与各语言文件一起冻结：旧库中无法无损写成单个 cue 的源正文
+    // （首尾换行/段内空白行/回车）在此明确列出，整批失败、不占任何导出版本。
+    ...cueRowTextProblems(project.subtitles).map((q) => ({
+      type: 'cue_text_unsafe',
+      word_start: q.word_start,
+      word_end: q.word_end,
+      subtitle_id: q.subtitle_id,
+      idx: q.idx,
+      line: q.line,
+      label: q.label,
+      message: q.message,
+    })),
   ];
 
   const cueById = new Map(project.subtitles.map((c) => [c.id, c]));

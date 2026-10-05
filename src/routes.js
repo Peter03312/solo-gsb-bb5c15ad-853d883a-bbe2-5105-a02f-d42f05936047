@@ -8,7 +8,7 @@ const {
   DEFAULT_RULES,
 } = require('./db');
 const { computeLayout, validateStructure, validateRules } = require('./layout');
-const { validateWords, validateCuts, validateRules: validateRulesInput, validateSubtitleEdit } = require('./validate');
+const { validateWords, validateCuts, validateRules: validateRulesInput, validateSubtitleEdit, validateCueText } = require('./validate');
 const { parseRevisionItems, evaluateRevision } = require('./revision');
 const { parseWordRevisionItems, evaluateWordRevision } = require('./word-revision');
 const {
@@ -51,7 +51,7 @@ const {
   buildCommentsList: buildReworkCommentsList, batchSummary: reworkBatchSummary,
   fileLabel: reworkFileLabel, fileRef: reworkFileRef, toIntId: toReworkIntId,
 } = require('./rework');
-const { toWebVtt } = require('./vtt');
+const { toWebVtt, cueRowTextProblems } = require('./vtt');
 
 /**
  * 挂载 API 路由。统一错误格式：
@@ -306,6 +306,14 @@ function createApp(db) {
     if (newText.trim() === '') {
       return res.status(422).json({ error: '字幕文本不能为空', errors: ['字幕文本不能为空'] });
     }
+    // 正文须能无损写成单个 WebVTT cue：拒绝首尾换行/段内空白行/回车（段内单换行允许）
+    const cueTextErrors = validateCueText(newText, '字幕文本');
+    if (cueTextErrors.length > 0) {
+      return res.status(422).json({
+        error: '字幕文本无法无损写入冻结 WebVTT，未保存',
+        errors: cueTextErrors,
+      });
+    }
     if (start_ms !== undefined || end_ms !== undefined) {
       const neighbors = {
         prev: db.prepare(
@@ -362,7 +370,19 @@ function createApp(db) {
     }
     const structural = validateStructure(p.subtitles, p.words, p.cuts);
     const ruleProblems = validateRules(p.subtitles, p.rules);
-    const conflicts = [...structural, ...ruleProblems];
+    // 旧库可能已有无法无损写成单个 cue 的正文（首尾换行/段内空白行/回车）：
+    // 写快照前明确列出问题行，拒绝生成（修正文后可照常导出）。
+    const cueTextProblems = cueRowTextProblems(p.subtitles).map((q) => ({
+      type: 'cue_text_unsafe',
+      word_start: q.word_start,
+      word_end: q.word_end,
+      subtitle_id: q.subtitle_id,
+      idx: q.idx,
+      line: q.line,
+      label: q.label,
+      message: q.message,
+    }));
+    const conflicts = [...structural, ...ruleProblems, ...cueTextProblems];
     if (conflicts.length > 0) {
       return res.status(422).json({
         error: `字幕未通过导出校验（${conflicts.length} 处问题），未生成文件`,
@@ -1624,7 +1644,7 @@ function createApp(db) {
 
     const ruleErrors = checkTranslationText(parsed.item.text, cue, p.rules);
     if (ruleErrors.length > 0) {
-      return res.status(422).json({ error: '译文未通过当前字数/字速规则，未保存', errors: ruleErrors, current: { cue } });
+      return res.status(422).json({ error: '译文未通过当前校验（字数/字速或正文无法无损冻结），未保存', errors: ruleErrors, current: { cue } });
     }
 
     const existing = db.prepare(
@@ -1730,7 +1750,7 @@ function createApp(db) {
     const ruleErrors = checkTranslationText(row.text, cue, p.rules);
     if (ruleErrors.length > 0) {
       return res.status(422).json({
-        error: '待复核译文不满足当前字数/字速规则，请先修改译文再确认（数据未改动）',
+        error: '待复核译文未通过当前校验（字数/字速或正文无法无损冻结），请先修改译文再确认（数据未改动）',
         errors: ruleErrors,
         current: { cue, translation: mapRow(row) },
       });

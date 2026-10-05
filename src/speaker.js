@@ -28,6 +28,7 @@
 const { validateStructure, validateRules } = require('./layout');
 const { normalizeLang, checkTranslationText, activeTranslationsByLang } = require('./translation');
 const { getGlossary, checkTerms } = require('./glossary');
+const { cueRowTextProblems } = require('./vtt');
 
 function isInt(v) {
   return typeof v === 'number' && Number.isInteger(v);
@@ -450,6 +451,17 @@ function evaluateAttributedExport(db, project, request) {
   const conflicts = [
     ...validateStructure(project.subtitles, project.words, project.cuts),
     ...validateRules(project.subtitles, project.rules),
+    // 旧库可能已有无法无损写成单个 cue 的源正文：写署名快照前明确列出问题行。
+    ...cueRowTextProblems(project.subtitles).map((q) => ({
+      type: 'cue_text_unsafe',
+      word_start: q.word_start,
+      word_end: q.word_end,
+      subtitle_id: q.subtitle_id,
+      idx: q.idx,
+      line: q.line,
+      label: q.label,
+      message: q.message,
+    })),
   ];
 
   const attributionByCue = new Map(project.attributions.map((a) => [a.subtitle_id, a]));
@@ -465,11 +477,21 @@ function evaluateAttributedExport(db, project, request) {
 
   const rows = [];
   const cues = [];
+  const sourceCueProblems = new Map(
+    cueRowTextProblems(project.subtitles).map((q) => [q.subtitle_id, q])
+  );
   for (const cue of project.subtitles) {
     const reasons = [];
     const codes = [];
     let text = cue.text;
     let speakerName = null;
+
+    // --- 正文可无损冻结（原文/译文都必须；译文问题在下方译文分支另计）---
+    const sourceCueProblem = sourceCueProblems.get(cue.id);
+    if (sourceCueProblem) {
+      codes.push('cue_text_unsafe');
+      reasons.push(sourceCueProblem.message);
+    }
 
     // --- 归属核对（原文/译文都必须逐行有有效归属）---
     const attribution = attributionByCue.get(cue.id);
@@ -514,6 +536,8 @@ function evaluateAttributedExport(db, project, request) {
           codes.push('translation_review');
           reasons.push('该译文为待复核状态：源字幕文本/时间/词区间已变化，须确认或重新保存后再导出');
         } else {
+          // checkTranslationText 同时核对可无损冻结（首尾换行/段内空白行/回车）
+          // 与现行字数/字速；任一不过统一记 translation_invalid（原因逐行列出）。
           const ruleReasons = checkTranslationText(tr.text, cue, project.rules);
           if (ruleReasons.length > 0) {
             codes.push('translation_invalid');

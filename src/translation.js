@@ -14,6 +14,8 @@
  *   - 待复核译文可由校对者在当前源行上确认；过期版本或无效译文返回当前值与原因且不改数据。
  */
 
+const { cueTextProblem } = require('./vtt');
+
 function isInt(v) {
   return typeof v === 'number' && Number.isInteger(v);
 }
@@ -68,12 +70,27 @@ function parseConfirmBody(body) {
 }
 
 /**
- * 译文自身的现行规则校验：字数 ≤ max_chars；字速（沿用源行起止）≤ max_cps。
+ * 译文正文须能无损写成单个 WebVTT cue 的中文原因（指出问题行），空数组表示通过。
+ */
+function cueSafetyReasons(text) {
+  const problem = cueTextProblem(text);
+  if (!problem) return [];
+  const where = problem.label === 'head'
+    ? '第 1 行前存在首部空行'
+    : problem.label === 'tail'
+      ? `第 ${problem.index} 行后存在尾部空行`
+      : `第 ${problem.index} 行有问题`;
+  return [`译文${where}，无法无损写成单个 WebVTT cue：${problem.reason}`];
+}
+
+/**
+ * 译文自身的现行规则校验：正文可无损冻结（无首尾换行/段内空白行/回车）；
+ * 字数 ≤ max_chars；字速（沿用源行起止）≤ max_cps。
  * 时长/词时段/切点由源字幕保证（译文不改时间与切点），不在此重复。
  * 返回中文原因列表，空数组表示通过。
  */
 function checkTranslationText(text, cue, rules) {
-  const reasons = [];
+  const reasons = cueSafetyReasons(text);
   const len = text.length;
   if (len > rules.max_chars) {
     reasons.push(`译文 ${len} 字，超过单条最大字数 ${rules.max_chars}`);
@@ -278,6 +295,7 @@ function listLanguages(db, projectId) {
  */
 function evaluateExport(db, projectId, lang) {
   const glossaryMod = require('./glossary');
+  const { cueRowTextProblems } = require('./vtt');
   const view = buildLangView(db, projectId, lang);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
   const words = db.prepare(
@@ -291,6 +309,17 @@ function evaluateExport(db, projectId, lang) {
   const conflicts = [
     ...validateStructure(view.entries.map((e) => e.cue), words, cuts),
     ...validateRules(view.entries.map((e) => e.cue), view.rules),
+    // 源正文同样要冻结进时间轴一致的快照：旧库不合格源行写快照前明确列出
+    ...cueRowTextProblems(view.entries.map((e) => e.cue)).map((q) => ({
+      type: 'cue_text_unsafe',
+      word_start: q.word_start,
+      word_end: q.word_end,
+      subtitle_id: q.subtitle_id,
+      idx: q.idx,
+      line: q.line,
+      label: q.label,
+      message: q.message,
+    })),
   ];
 
   const missing = [];

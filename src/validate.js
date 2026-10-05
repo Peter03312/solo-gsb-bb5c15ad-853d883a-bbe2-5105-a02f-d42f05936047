@@ -5,6 +5,8 @@
  * 错误信息包含出问题的下标/数值，便于前端直接展示。
  */
 
+const { cueTextProblem } = require('./vtt');
+
 function isInt(v) {
   return typeof v === 'number' && Number.isInteger(v);
 }
@@ -28,6 +30,19 @@ function validateWords(words) {
     if (typeof w.text !== 'string' || w.text.trim() === '') {
       errors.push(`第 ${i} 个词缺少文本（text 必须是非空字符串）`);
       continue;
+    }
+    // 词文本会按词序拼进字幕正文并最终冻结为 WebVTT。导入时词文本自身的首尾空白
+    // 会被规范化 trim，因此首尾换行无需拒绝；但回车（解析时会被改写）与词内部
+    // 空白行（trim 后仍保留、会把拼出的 cue 劈成多块）无法无损写成单个 cue，
+    // 导入即拒绝并指出问题行。
+    const cueProblem = w.text.includes('\r')
+      ? cueTextProblem(w.text)
+      : cueTextProblem(w.text.trim());
+    if (cueProblem && cueProblem.label === 'line') {
+      errors.push(
+        `第 ${i} 个词 "${w.text.trim()}" 的文本第 ${cueProblem.index} 行无法无损写入 WebVTT：` +
+        `${cueProblem.reason}（词文本会拼入字幕正文）`
+      );
     }
     if (!isInt(w.start_ms) || !isInt(w.end_ms)) {
       errors.push(`第 ${i} 个词 "${w.text}" 的时间必须是整数毫秒`);
@@ -130,4 +145,22 @@ function validateSubtitleEdit({ start_ms, end_ms }, wordRange, words, cuts, neig
   return errors;
 }
 
-module.exports = { validateWords, validateCuts, validateRules, validateSubtitleEdit };
+/**
+ * 字幕/译文正文的“可无损冻结”校验：拒绝首尾换行、段内空白行与回车，
+ * 合法的段内单换行（多行正文）允许。返回中文原因列表（含问题行号），空数组表示通过。
+ * what 为问题正文的归属描述，如 '字幕文本'、'译文文本'。
+ */
+function validateCueText(text, what = '正文') {
+  const problem = cueTextProblem(text);
+  if (!problem) return [];
+  const where = problem.label === 'head'
+    ? '第 1 行前存在首部空行'
+    : problem.label === 'tail'
+      ? `第 ${problem.index} 行后存在尾部空行`
+      : `第 ${problem.index} 行有问题`;
+  return [`${what}${where}，无法无损写成单个 WebVTT cue：${problem.reason}`];
+}
+
+module.exports = {
+  validateWords, validateCuts, validateRules, validateSubtitleEdit, validateCueText,
+};

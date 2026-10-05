@@ -11,14 +11,120 @@ function formatTimestamp(ms) {
 }
 
 /**
+ * 判断正文文本能否“无损写成单个 WebVTT cue”。
+ *
+ * 冻结快照写入后还会被严格解析（返修核对/批次差异都以 parseWebVtt 的结果为准），
+ * 因此正文必须与“toWebVtt 写入 → parseWebVtt 读回”严格一一对应：
+ *   - 空字符串 '' 是合法的空载荷 cue（可原样往返；业务保存接口另有非空校验）；
+ *   - 纯空白文本（空格/制表符等）会被解析器当作空白分隔行而丢失，拒绝；
+ *   - 任何回车符（\r）都会被解析器统一成 \n，无法无损往返，直接拒绝；
+ *   - 非空文本按 \n 切分后的每一行都必须是非空白行——首/尾空行会使 cue 块被
+ *     空白行截断（首空行并入上一块、尾空行被静默丢失），段内空白行（“空行”）会把
+ *     一个 cue 劈成两个块，均无法表示为单个 cue。
+ * 合法的“段内单换行”（多行正文，如 '第一行\n第二行'）照常允许。
+ *
+ * 返回 null 表示可无损写入；否则返回 { index, label, reason }：
+ *   index 为出问题的 1 基行号（空文本不报错），
+ *   label 为 head / line / tail，reason 为中文说明。
+ */
+function cueTextProblem(text) {
+  if (typeof text !== 'string') return { index: 1, label: 'line', reason: '正文不是文本' };
+  if (text === '') return null; // 空载荷 cue：与解析器严格往返（业务保存接口另要求非空）
+  if (text.includes('\r')) {
+    return { index: 1, label: 'line', reason: '含有回车符（CR/CRLF）：冻结 WebVTT 只接受 LF 换行，回车会被规范化而无法无损保存' };
+  }
+  if (text.trim() === '') {
+    return { index: 1, label: 'line', reason: '正文为纯空白：空白行在 WebVTT 中是 cue 分隔符，无法作为 cue 正文无损保存' };
+  }
+  const lines = text.split('\n');
+  let firstNonBlank = -1;
+  let lastNonBlank = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() !== '') {
+      if (firstNonBlank === -1) firstNonBlank = i;
+      lastNonBlank = i;
+    }
+  }
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === '') {
+      // 连续的首部/尾部空行统一归到 head/tail（指向第一处空行），夹在正文之间的归 line
+      const label = i < firstNonBlank ? 'head' : (i > lastNonBlank ? 'tail' : 'line');
+      let reason;
+      if (label === 'head') {
+        reason = '首部空行会截断 WebVTT cue 块（请删除开头的换行/空白行）';
+      } else if (label === 'tail') {
+        reason = '尾部换行会被 WebVTT 静默丢失（请删除结尾的换行/空白行）';
+      } else {
+        reason = '段内不允许空白行：空行会把一个 cue 劈成多个块（段内单换行可以保留）';
+      }
+      return { index: i + 1, label, reason };
+    }
+  }
+  return null;
+}
+
+/** cueTextProblem 的布尔形式 */
+function isCueTextSafe(text) {
+  return cueTextProblem(text) === null;
+}
+
+/**
+ * 批量列出字幕行中无法无损冻结的正文（旧库历史数据体检 + 各导出闸门共用）。
+ * cues 元素至少含 { id, idx, word_start, word_end, text }。
+ * 返回 [{ subtitle_id, idx, word_start, word_end, text, line, label, reason, message }]。
+ */
+function cueRowTextProblems(cues) {
+  const out = [];
+  for (const cue of cues) {
+    const problem = cueTextProblem(cue.text);
+    if (!problem) continue;
+    const rowNo = cue.idx !== undefined && cue.idx !== null ? cue.idx + 1 : null;
+    out.push({
+      subtitle_id: cue.id,
+      idx: cue.idx,
+      word_start: cue.word_start,
+      word_end: cue.word_end,
+      text: cue.text,
+      line: problem.index,
+      label: problem.label,
+      reason: problem.reason,
+      message: describeCueTextProblem(
+        `字幕 ${cue.id}${rowNo !== null ? `（第 ${rowNo} 行）` : ''}正文`, problem),
+    });
+  }
+  return out;
+}
+
+/**
+ * 构造一条指向具体行的 cue 正文问题说明（供写入入口与导出闸门共用）。
+ * what 描述问题正文的归属，如 '字幕 3 的正文' / '语言 en 在字幕 5 上的译文'。
+ */
+function describeCueTextProblem(what, problem) {
+  if (!problem) return null;
+  if (problem.label === 'head') return `${what}第 1 行前存在首部空行，无法无损写成单个 WebVTT cue：${problem.reason}`;
+  if (problem.label === 'tail') return `${what}第 ${problem.index} 行后存在尾部空行，无法无损写成单个 WebVTT cue：${problem.reason}`;
+  return `${what}第 ${problem.index} 行无法无损写成单个 WebVTT cue：${problem.reason}`;
+}
+
+/**
  * 生成 WebVTT 文件内容。cues 需已按时间升序：
  * [{ start_ms, end_ms, text, speaker? }]
  *
  * speaker 缺省时输出普通正文（与旧导出完全兼容）；给出时按 WebVTT 说话人标签语法输出
  * `<v 显示名>正文</v>`。显示名须事先通过 validateSpeakerName（不含换行/<、>），
  * 否则标签语法会被破坏，调用方不得传入。
+ *
+ * text 必须已通过 cueTextProblem 校验：本系统只写“能无损解析回同一组 cue”的快照，
+ * 不满足时直接抛错（调用方各写入/导出入口应更早拒绝并指出问题行），避免写出
+ * 解析为损坏或尾部换行被静默丢失的冻结文件。
  */
 function toWebVtt(cues) {
+  for (const c of cues) {
+    const problem = cueTextProblem(c.text);
+    if (problem) {
+      throw new Error(describeCueTextProblem('cue 正文', problem));
+    }
+  }
   const sorted = [...cues].sort((a, b) => a.start_ms - b.start_ms || a.end_ms - b.end_ms);
   const blocks = ['WEBVTT', ''];
   sorted.forEach((c, i) => {
@@ -201,4 +307,7 @@ function diffCueSegments(a, b) {
   return merged;
 }
 
-module.exports = { toWebVtt, formatTimestamp, parseTimestamp, parseWebVtt, diffCueSegments };
+module.exports = {
+  toWebVtt, formatTimestamp, parseTimestamp, parseWebVtt, diffCueSegments,
+  cueTextProblem, isCueTextSafe, describeCueTextProblem, cueRowTextProblems,
+};
